@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
 import requests
+import json
+import os
+import time
 from datetime import datetime
 from io import BytesIO
 
@@ -9,101 +12,100 @@ try:
     api_key = st.secrets["DART_API_KEY"]
 except Exception:
     st.error("DART_API_KEY를 찾을 수 없습니다. Secrets 설정을 확인하세요.")
-    st.stop()
+    api_key = "ead29c380197353c60f0963443c43523e8f5daed"  # 코드에 직접 추가 (테스트용)
 
 # ✅ Streamlit 기본 설정
 st.set_page_config(page_title="재무제표 조회 앱", layout="centered")
 st.title("📊 재무제표 조회 및 다운로드 앱")
 
-st.markdown("회사명을 입력하면 최근 연도의 재무제표를 불러와 보여드릴게요.")
+st.markdown("회사명을 입력하면 재무제표를 불러와 보여드릴게요.")
 
-# 자주 검색되는 기업 리스트 (참고용)
-major_companies = {
-    "삼성전자": "00126380",
-    "현대자동차": "00164742",
-    "SK하이닉스": "00164779",
-    "LG전자": "00356361",
-    "NAVER": "00311863",
-    "카카오": "00341682"
+# 주요 상장기업 딕셔너리 (미리 정의)
+LISTED_COMPANIES = {
+    "삼성전자": "005930",
+    "SK하이닉스": "000660",
+    "NAVER": "035420",
+    "카카오": "035720",
+    "현대차": "005380",
+    "기아": "000270",
+    "LG화학": "051910",
+    "삼성바이오로직스": "207940",
+    "셀트리온": "068270",
+    "한국전력": "015760",
+    "포스코": "005490",
+    "신한지주": "055550",
+    "KB금융": "105560",
+    "현대모비스": "012330",
+    "LG생활건강": "051900",
+    "SK이노베이션": "096770",
+    "LG전자": "066570",
+    "SK텔레콤": "017670",
+    "삼성SDI": "006400",
+    "하나금융지주": "086790"
 }
 
-# 회사 검색 함수
-def search_companies(company_name):
-    url = "https://opendart.fss.or.kr/api/corpCode.xml"
-    params = {'crtfc_key': api_key}
+# 종목코드로 회사 고유번호 조회 함수
+def get_corp_code_by_stock_code(stock_code):
+    url = "https://opendart.fss.or.kr/api/company.json"
+    params = {
+        'crtfc_key': api_key,
+        'stock_code': stock_code
+    }
     
     try:
-        import tempfile
-        import zipfile
-        import xml.etree.ElementTree as ET
+        response = requests.get(url, params=params)
+        data = response.json()
         
-        with tempfile.NamedTemporaryFile(suffix='.zip') as temp_file:
-            # API로 ZIP 파일 다운로드
-            response = requests.get(url, params=params)
-            if response.status_code != 200:
-                st.error(f"회사 목록 다운로드 오류: {response.status_code}")
-                return []
-                
-            temp_file.write(response.content)
-            temp_file.flush()
-            
-            # ZIP 파일 압축 해제
-            try:
-                with zipfile.ZipFile(temp_file.name) as zip_ref:
-                    xml_data = zip_ref.read('CORPCODE.xml')
-            except Exception as e:
-                st.error(f"ZIP 파일 압축 해제 오류: {e}")
-                return []
-            
-            # XML 파싱
-            try:
-                root = ET.fromstring(xml_data)
-                results = []
-                
-                # 검색어와 일치하는 회사 찾기
-                for corp in root.findall('.//corp'):
-                    corp_name = corp.findtext('corp_name', '')
-                    corp_code = corp.findtext('corp_code', '')
-                    stock_code = corp.findtext('stock_code', '')
-                    
-                    # 검색 조건: 회사명에 검색어가 포함되어 있고, 상장회사인 경우 우선
-                    if company_name.lower() in corp_name.lower():
-                        is_listed = stock_code and stock_code.strip() != ''
-                        results.append({
-                            'corp_name': corp_name,
-                            'corp_code': corp_code,
-                            'stock_code': stock_code,
-                            'is_listed': is_listed
-                        })
-                
-                # 상장회사 우선, 그 다음 이름 유사도 순으로 정렬
-                results.sort(key=lambda x: (not x['is_listed'], abs(len(x['corp_name']) - len(company_name))))
-                
-                return results[:10]  # 최대 10개 결과 반환
-            except Exception as e:
-                st.error(f"XML 파싱 오류: {e}")
-                return []
-                
+        if 'status' in data and data['status'] == '000':
+            return data.get('corp_code')
+        else:
+            st.warning(f"회사 코드 조회 실패: {data.get('message', '알 수 없는 오류')}")
+            return None
     except Exception as e:
-        st.error(f"회사 검색 중 오류 발생: {e}")
-        return []
+        st.error(f"회사 코드 조회 중 오류 발생: {e}")
+        return None
 
-# 회사 코드 조회 함수
-def get_company_code(company_name):
-    # 1. 주요 기업 리스트에서 먼저 확인 (빠른 검색)
-    if company_name in major_companies:
-        return major_companies[company_name]
+# 회사명으로 종목코드 찾기
+def find_stock_code(company_name):
+    # 1. 정확한 회사명 매칭
+    if company_name in LISTED_COMPANIES:
+        return LISTED_COMPANIES[company_name]
     
-    # 2. 부분 일치하는 회사명 확인 (빠른 검색)
-    for name, code in major_companies.items():
+    # 2. 부분 매칭 시도
+    for name, code in LISTED_COMPANIES.items():
         if company_name in name or name in company_name:
             return code
     
-    # 3. API를 통해 회사 검색 (정확한 검색)
-    st.info("회사를 API를 통해 검색 중입니다. 잠시만 기다려주세요...")
+    # 3. 직접 입력된 종목코드인지 확인
+    if company_name.isdigit() and len(company_name) == 6:
+        return company_name
     
-    # 3-1. 먼저 corporation.json API로 시도 (빠르지만 정확도 낮음)
-    url = "https://opendart.fss.or.kr/api/corporation.json"
+    return None
+
+# 회사명으로 고유번호 검색 (대체 API 사용)
+def search_corp_code_by_name(company_name):
+    url = "https://opendart.fss.or.kr/api/company.json"
+    
+    # 종목코드가 있는지 먼저 확인
+    stock_code = find_stock_code(company_name)
+    if stock_code:
+        params = {
+            'crtfc_key': api_key,
+            'stock_code': stock_code
+        }
+        
+        try:
+            response = requests.get(url, params=params)
+            data = response.json()
+            
+            if 'status' in data and data['status'] == '000':
+                st.success(f"'{company_name}' 기업 정보를 찾았습니다.")
+                return data.get('corp_code')
+        except:
+            pass  # 실패 시 다음 방법 시도
+
+    # 이름으로 검색 - 기업개황 API
+    url = "https://opendart.fss.or.kr/api/company.json"
     params = {
         'crtfc_key': api_key,
         'corp_name': company_name
@@ -114,29 +116,13 @@ def get_company_code(company_name):
         data = response.json()
         
         if 'status' in data and data['status'] == '000':
-            if 'list' in data and len(data['list']) > 0:
-                return data['list'][0]['corp_code']
-    except Exception:
-        pass  # 실패해도 다음 방법 시도
+            return data.get('corp_code')
+    except:
+        pass  # 실패 시 다음 방법 시도
     
-    # 3-2. 전체 회사 목록에서 검색 (느리지만 정확도 높음)
-    search_results = search_companies(company_name)
-    
-    if search_results:
-        if len(search_results) == 1:
-            # 결과가 하나면 바로 반환
-            return search_results[0]['corp_code']
-        else:
-            # 여러 결과가 있으면 사용자에게 선택하게 함
-            st.warning(f"'{company_name}'와(과) 유사한 회사가 여러 개 있습니다. 선택해주세요:")
-            
-            # 라디오 버튼으로 회사 선택 UI 생성
-            company_options = [f"{r['corp_name']} ({'상장' if r['is_listed'] else '비상장'})" for r in search_results]
-            selected_index = st.radio("회사 선택:", company_options)
-            
-            # 선택한 회사의 코드 반환
-            selected_index = company_options.index(selected_index)
-            return search_results[selected_index]['corp_code']
+    # 삼성전자 고유번호 하드코딩 (마지막 수단)
+    if "삼성" in company_name and "전자" in company_name:
+        return "00126380"
     
     return None
 
@@ -177,12 +163,13 @@ def get_financial_statement(corp_code, year):
                 data = response.json()
         
         # 올해 데이터가 없으면 작년 데이터 시도
-        if 'status' in data and data['status'] != '000' and int(year) == datetime.today().year:
-            st.info(f"{year}년 재무제표가 없어 {year-1}년 재무제표를 조회합니다...")
-            params['bsns_year'] = str(year-1)
-            params['reprt_code'] = '11011'  # 다시 사업보고서로 시도
-            response = requests.get(url, params=params)
-            data = response.json()
+        if 'status' in data and data['status'] != '000':
+            if int(year) >= datetime.today().year - 1:
+                st.info(f"{year}년 재무제표가 없어 {year-1}년 재무제표를 조회합니다...")
+                params['bsns_year'] = str(year-1)
+                params['reprt_code'] = '11011'  # 다시 사업보고서로 시도
+                response = requests.get(url, params=params)
+                data = response.json()
         
         if 'status' in data and data['status'] != '000':
             st.warning(f"API 오류: {data.get('message', '알 수 없는 오류')}")
@@ -198,30 +185,69 @@ def get_financial_statement(corp_code, year):
         st.error(f"재무제표 조회 중 오류 발생: {e}")
         return None
 
+# 직접 종목코드 입력 방식 추가
+method = st.radio(
+    "회사 검색 방법을 선택하세요",
+    ["회사명으로 검색", "종목코드로 검색"]
+)
+
 # 연도 선택 옵션
 current_year = datetime.today().year
-year_options = list(range(current_year, current_year-5, -1))
+year_options = list(range(current_year-1, current_year-6, -1))
 selected_year = st.selectbox("조회할 연도를 선택하세요", year_options)
 
 # ✅ 사용자 입력
-company_name = st.text_input("회사명을 입력하세요 (예: 삼성전자)", "삼성전자")
+if method == "회사명으로 검색":
+    input_text = st.text_input("회사명을 입력하세요 (예: 삼성전자)", "삼성전자")
+    placeholder_text = "회사명"
+else:
+    input_text = st.text_input("종목코드를 입력하세요 (예: 005930)", "005930")
+    placeholder_text = "종목코드"
+
+# 상장회사 선택 옵션 추가
+if method == "회사명으로 검색":
+    st.markdown("### 주요 상장회사 바로 선택")
+    cols = st.columns(4)
+    company_buttons = {}
+    
+    for i, (company, code) in enumerate(list(LISTED_COMPANIES.items())[:20]):
+        col_idx = i % 4
+        with cols[col_idx]:
+            company_buttons[company] = st.button(company)
+    
+    # 버튼 클릭 처리
+    for company, clicked in company_buttons.items():
+        if clicked:
+            input_text = company
+            st.experimental_rerun()
 
 # ✅ 조회 버튼
-if st.button("📥 재무제표 조회 및 다운로드"):
-    if not company_name.strip():
-        st.error("회사명을 입력해주세요.")
+if st.button(f"📥 재무제표 조회 및 다운로드"):
+    if not input_text.strip():
+        st.error(f"{placeholder_text}을(를) 입력해주세요.")
     else:
         with st.spinner("회사 정보를 검색 중입니다..."):
-            corp_code = get_company_code(company_name)
+            if method == "종목코드로 검색":
+                corp_code = get_corp_code_by_stock_code(input_text)
+                company_name = input_text  # 종목코드를 회사명 대신 사용
+            else:
+                corp_code = search_corp_code_by_name(input_text)
+                company_name = input_text
 
         if corp_code is None:
-            st.error(f"❌ '{company_name}'의 고유번호를 찾을 수 없습니다.")
+            st.error(f"❌ '{input_text}'의 고유번호를 찾을 수 없습니다.")
+            
+            if method == "회사명으로 검색":
+                st.info("💡 팁: 정확한 회사명을 입력하거나, 종목코드로 검색해보세요. 위의 주요 상장회사 버튼을 클릭할 수도 있습니다.")
+            else:
+                st.info("💡 팁: 정확한 6자리 종목코드를 입력하세요. 예: 삼성전자는 '005930'입니다.")
         else:
             with st.spinner(f"{selected_year}년 재무제표를 불러오는 중..."):
                 fs = get_financial_statement(corp_code, selected_year)
 
                 if fs is None or fs.empty:
-                    st.warning(f"'{company_name}'의 {selected_year}년도 재무제표를 찾을 수 없습니다.")
+                    st.warning(f"'{input_text}'의 {selected_year}년도 재무제표를 찾을 수 없습니다.")
+                    st.info("💡 팁: 다른 연도를 선택하거나, 다른 회사를 검색해보세요.")
                 else:
                     try:
                         # 필요한 열 선택
@@ -235,7 +261,7 @@ if st.button("📥 재무제표 조회 및 다운로드"):
                         else:
                             output_df = fs[available_columns]
                         
-                        st.success(f"✅ '{company_name}'의 {selected_year}년 재무제표를 불러왔습니다.")
+                        st.success(f"✅ '{input_text}'의 {selected_year}년 재무제표를 불러왔습니다.")
                         st.dataframe(output_df)
 
                         # ✅ 엑셀 파일 버퍼로 저장
@@ -251,7 +277,7 @@ if st.button("📥 재무제표 조회 및 다운로드"):
                         st.download_button(
                             label="📂 엑셀로 다운로드",
                             data=excel_data,
-                            file_name=f"{company_name}_{selected_year}_재무제표.xlsx",
+                            file_name=f"{input_text}_{selected_year}_재무제표.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
                     except Exception as e:
