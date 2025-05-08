@@ -1,4 +1,4 @@
 streamlit
 pandas
-Opendartreader
+git+https://github.com/FinanceData/OpenDartReader.git
 xlsxwriter
