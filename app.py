@@ -1,8 +1,8 @@
 import streamlit as st
-import OpenDartReader
 import pandas as pd
 from datetime import datetime
 from io import BytesIO
+from opendartreader import OpenDartReader  # 수정된 import 문
 
 # ✅ DART API 키를 Streamlit Secrets에서 가져오기
 api_key = st.secrets["DART_API_KEY"]
